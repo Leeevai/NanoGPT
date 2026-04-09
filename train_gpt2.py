@@ -43,7 +43,7 @@ class CasualSelfAttention(nn.Module):
         y = self.c_proj(y)
         return y    
     
-    #commit message: implement the multi-head self attention module for GPT-2, which includes the linear projections for query, key, value, the attention calculation, and the output projection. The attention calculation includes scaling the dot product of query and key by the square root of the head size, applying a causal mask to prevent attending to future tokens, and applying softmax to get the attention weights. Finally, we compute the output by multiplying the attention weights with the value and applying the output projection.
+    
     
     
     
@@ -76,11 +76,11 @@ class Block(nn.Module):
     
 @dataclass
 class GPTConfig:
-    block_size: int = 256 #context length
-    vocab_size: int = 65
-    n_layer: int = 6
-    n_head: int = 6
-    n_embd: int = 384
+    block_size: int = 1024 #context length
+    vocab_size: int = 50257 # 50k BPE merges + 256 bytes tokens + 1 <|endoftext|> token
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
     
 class GPT(nn.Module):
     def __init__(self, config):
@@ -95,3 +95,55 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
+    @classmethod
+    def from_pretrained(cls, model_type):
+        """Loads a pre-trained GPT model from the Hugging Face Transformers library."""
+        assert model_type in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], f"Invalid model type: {model_type}. Must be one of ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']"
+        from transformers import GPT2LMHeadModel
+        print(f"Loading pre-trained GPT model: {model_type}")
+        
+        #n_layes, n_head, n_embd are determined by the model type (e.g. gpt2, gpt2-medium, gpt2-large, gpt2-xl)
+        config_args = {
+            'gpt2': dict(n_layer=12, n_head=12, n_embd=768), # 124M parameters
+            'gpt2-medium': dict(n_layer=24, n_head=16, n_embd=1024), # 355M parameters
+            'gpt2-large': dict(n_layer=36, n_head=20, n_embd=1280), # 774M parameters
+            'gpt2-xl': dict(n_layer=48, n_head=25, n_embd=1600), # 1.5B parameters
+        }[model_type]
+        config_args['vocab_size'] = 50257
+        config_args['block_size'] = 1024
+        
+        config = GPTConfig(**config_args)
+        model = GPT(config)
+        sd = model.state_dict()
+        sd_keys = sd.keys()
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # remove the bias buffer from the state dict keys since it is not a parameter and will not be loaded from the pre-trained model
+        
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+        sd_hf = model_hf.state_dict()
+        
+        
+        sd_keys_hf = sd_hf.keys()
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # remove the bias buffer from the state dict keys since it is not a parameter and will not be loaded from the pre-trained model
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # remove the bias buffer from the state dict keys since it is not a parameter and will not be loaded from the pre-trained model
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        # basically the openai implementation of GPT-2 has the weights of the linear layers transposed compared to the Hugging Face implementation, so we need to transpose the weights when loading them from the pre-trained model
+        #this means that we have to transpose the weights of the linear layers when loading them from the pre-trained model, but we do not have to transpose the weights of the embedding layers since they are not transposed in either implementation
+        
+        assert len(sd_keys) == len(sd_keys_hf), f"Number of keys in state dict does not match number of keys in pre-trained model: {len(sd_keys)} vs {len(sd_keys_hf)}"
+        
+        for k in sd_keys_hf:
+            if any(k.endswith(w) for w in transposed):
+                #special treatment for the Conv1D weights we need to transpose
+                assert sd_hf[k].shape[::-1] == sd[k].shape, f"Shape mismatch for key {k}: {sd_hf[k].shape} vs {sd[k].shape}"
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k].T)
+            else:
+                #vanilla copy for the rest of the weights
+                assert sd_hf[k].shape == sd[k].shape, f"Shape mismatch for key {k}: {sd_hf[k].shape} vs {sd[k].shape}"
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+                    
+        print(f"Loaded pre-trained GPT model: {model_type}")
+        return model
+    #commit message: implement the multi-head self attention module for GPT-2, which includes the linear projections for query, key, value, the attention calculation, and the output projection. The attention calculation includes scaling the dot product of query and key by the square root of the head size, applying a causal mask to prevent attending to future tokens, and applying softmax to get the attention weights. Finally, we compute the output by multiplying the attention weights with the value and applying the output projection.
+                
