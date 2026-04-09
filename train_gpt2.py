@@ -3,6 +3,25 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+
+class Block(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = nn.MultiheadAttention(config.n_embd, config.n_head)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.mlp = nn.Sequential(
+            nn.Linear(config.n_embd, 4 * config.n_embd),
+            nn.GELU(),
+            nn.Linear(4 * config.n_embd, config.n_embd),
+        )
+        
+    def forward(self, x):
+        x = x + self.attn(self.ln_1(x), self.ln_1(x), self.ln_1(x))[0]
+        x = x + self.mlp(self.ln_2(x))
+        return x
+.
+
 @dataclass
 class GPTConfig:
     block_size: int = 256 #context length
