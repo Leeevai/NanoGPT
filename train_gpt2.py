@@ -4,24 +4,33 @@ from torch import nn
 from torch.nn import functional as F
 
 
+
+class MLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc = nn.Linear(config.n_embd, 4*config.n_embd)
+        self.c_proj = nn.Linear(4*config.n_embd, config.n_embd)
+        
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = F.gelu(x)
+        x = self.c_proj(x)
+        return x
+    
+#commit message: add MLP class that consists of two linear layers with a GELU activation in between. The first linear layer expands the embedding dimension by a factor of 4, and the second linear layer projects it back to the original embedding dimension. This MLP will be used in the transformer block to process the output of the self-attention mechanism.
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = nn.MultiheadAttention(config.n_embd, config.n_head)
+        self.attn = CasualSelfAttention(config.n_embd, config.n_head)
         self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.mlp = nn.Sequential(
-            nn.Linear(config.n_embd, 4 * config.n_embd),
-            nn.GELU(),
-            nn.Linear(4 * config.n_embd, config.n_embd),
-        )
+        self.mlp = MLP(config)
         
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x), self.ln_1(x), self.ln_1(x))[0]
+        x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
-.
-
+    
 @dataclass
 class GPTConfig:
     block_size: int = 256 #context length
