@@ -9,15 +9,16 @@ class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4*config.n_embd)
+        self.gelu = nn.GELU(approximate='tanh')
         self.c_proj = nn.Linear(4*config.n_embd, config.n_embd)
         
     def forward(self, x):
         x = self.c_fc(x)
-        x = F.gelu(x)
+        x = self.gelu(x)
         x = self.c_proj(x)
         return x
-    
-#commit message: add MLP class that consists of two linear layers with a GELU activation in between. The first linear layer expands the embedding dimension by a factor of 4, and the second linear layer projects it back to the original embedding dimension. This MLP will be used in the transformer block to process the output of the self-attention mechanism.
+    #commit message: change the activation function to GELU with tanh approximation for better performance
+
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
