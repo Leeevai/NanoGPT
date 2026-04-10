@@ -110,9 +110,7 @@ class GPT(nn.Module):
             x = block(x)
 
         x = self.transformer.ln_f(x)
-        logits = self.lm_head(x)
-
-        return logits
+        return self.lm_head(x)
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -165,6 +163,34 @@ class GPT(nn.Module):
         print(f"Loaded pre-trained GPT model: {model_type}")
         return model
     
-                
+num_return_sequences = 5
+max_length = 30     
+
 model = GPT.from_pretrained('gpt2')
-print("Model loaded successfully!")
+model.eval()
+model.to('mps')
+
+
+import tiktoken
+enc = tiktoken.get_encoding("gpt2")
+tokens = enc.encode("Hello, I'm a language model,")
+tokens = torch.tensor(tokens, dtype=torch.long, device='mps')
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # (num_return_sequences, sequence_length)
+x = tokens.to('mps')
+
+torch.manual_seed(42)
+torch.mps.manual_seed(42)
+while x.size(1) < max_length:
+    with torch.no_grad():
+        logits = model(x) # (num_return_sequences, sequence_length, vocab_size)
+        logits = logits[:, -1, :] # (num_return_sequences, vocab_size)
+        probs = F.softmax(logits, dim=-1) # (num_return_sequences, vocab_size)
+        topk_probs, topk_indices = torch.topk(probs, k=50, dim=-1) # (num_return_sequences, k)
+        ix = torch.multinomial(topk_probs, num_samples=1) # (num_return_sequences, 1)
+        xcol = torch.gather(topk_indices, dim=-1, index=ix) # (num_return_sequences, 1)
+        x = torch.cat((x, xcol), dim=1) # (num_return_sequences, sequence_length + 1)
+
+for i in range(num_return_sequences):
+    token = x[i,:max_length].tolist()
+    decoded = enc.decode(token)
+    print(f"Generated text {i+1}: {decoded}")
