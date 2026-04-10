@@ -95,6 +95,25 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
+    def forward(self, idx):
+        #idx is (B, T) tensor of token indices
+        B, T = idx.size()
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+
+        #forward the token and position embeddings
+        pos = torch.arange(0,T, dtype=torch.long, device=idx.device) # (1, T)
+        tok_emb = self.transformer.wte(idx) # (B, T, n_embd)
+        pos_emb = self.transformer.wpe(pos) # (1, T, n_embd)
+        x = tok_emb + pos_emb # (B, T, n_embd)
+
+        for block in self.transformer.h:
+            x = block(x)
+
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)
+
+        return logits
+
     @classmethod
     def from_pretrained(cls, model_type):
         """Loads a pre-trained GPT model from the Hugging Face Transformers library."""
@@ -145,5 +164,7 @@ class GPT(nn.Module):
                     
         print(f"Loaded pre-trained GPT model: {model_type}")
         return model
-    #commit message: implement the multi-head self attention module for GPT-2, which includes the linear projections for query, key, value, the attention calculation, and the output projection. The attention calculation includes scaling the dot product of query and key by the square root of the head size, applying a causal mask to prevent attending to future tokens, and applying softmax to get the attention weights. Finally, we compute the output by multiplying the attention weights with the value and applying the output projection.
+    
                 
+model = GPT.from_pretrained('gpt2')
+print("Model loaded successfully!")
