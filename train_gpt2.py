@@ -42,11 +42,8 @@ class CasualSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.c_proj(y)
         return y    
-    
-    
-    
-    
-    
+
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -73,7 +70,7 @@ class Block(nn.Module):
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
-    
+
 @dataclass
 class GPTConfig:
     block_size: int = 1024 #context length
@@ -81,7 +78,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    
+
 class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -95,7 +92,7 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         #idx is (B, T) tensor of token indices
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
@@ -110,7 +107,11 @@ class GPT(nn.Module):
             x = block(x)
 
         x = self.transformer.ln_f(x)
-        return self.lm_head(x)
+        loss = None
+        if targets is not None:
+            #reshape x and targets to be (B*T, vocab_size) and (B*T) respectively so that we can compute the cross-entropy loss
+            loss = F.cross_entropy(self.lm_head(x).view(-1, self.config.vocab_size), targets.view(-1))
+        return self.lm_head(x), loss
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -162,7 +163,7 @@ class GPT(nn.Module):
                     
         print(f"Loaded pre-trained GPT model: {model_type}")
         return model
-    
+
 num_return_sequences = 5
 max_length = 30     
 
@@ -171,19 +172,37 @@ if torch.cuda.is_available():
     device = "cuda"
 elif torch.backends.mps.is_available():
     device = "mps"
-    
-# model = GPT.from_pretrained('gpt2')
-model = GPT(GPTConfig())
-model.eval()
-model.to(device)
+
+print(f"Using device: {device}")
 
 
 import tiktoken
 enc = tiktoken.get_encoding("gpt2")
-tokens = enc.encode("Hello, I'm a language model,")
-tokens = torch.tensor(tokens, dtype=torch.long, device=device)
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # (num_return_sequences, sequence_length)
-x = tokens.to('mps')
+with open('input.txt', 'r') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B,T = 4,32
+buf = torch.tensor(tokens[:B*T+1], device=device)
+x = buf[:-1].view(B,T)
+y = buf[1:].view(B,T)
+
+# model = GPT.from_pretrained('gpt2')
+model = GPT(GPTConfig())
+model.to(device)
+# logits, loss = model(x, targets=y)
+
+#optimizer
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for _ in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, targets=y)
+    loss.backward()
+    optimizer.step()
+
+
+# print(loss) # (B, T, vocab_size)
+import sys; sys.exit(0)
 
 torch.manual_seed(42)
 torch.mps.manual_seed(42)
