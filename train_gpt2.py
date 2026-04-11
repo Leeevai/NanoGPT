@@ -183,7 +183,7 @@ class DataLoaderLite:
         enc = tiktoken.get_encoding("gpt2")
         self.tokens = torch.tensor(enc.encode(text), dtype=torch.long)
         print(f"Loaded {len(self.tokens)} tokens from input.txt")
-        print(f"1 epoch is {len(self.tokens) // (B*T)} iterations")
+        print(f"1 epoch is {len(self.tokens) // (B*T)} iterations\n")
         
         #state 
         self.current_position = 0
@@ -210,6 +210,7 @@ print(f"Using device: {device}")
 
 
 # ------------------------------------------------------------------------------------
+train_loader = DataLoaderLite(B=4, T=32)
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig())
 model.to(device)
@@ -219,6 +220,8 @@ model.to(device)
 # optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for _ in range(50):
+    x, y = train_loader.next_batch()
+    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
     logits, loss = model(x, targets=y)
     loss.backward()
