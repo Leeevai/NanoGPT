@@ -167,6 +167,39 @@ class GPT(nn.Module):
 num_return_sequences = 5
 max_length = 30     
 
+
+# ------------------------------------------------------------------------------------
+
+import tiktoken
+
+class DataLoaderLite:
+    def __init__(self,B,T):
+        self.B = B
+        self.T = T
+
+        #at init laod tokens from disk and store them in memory
+        with open('input.txt', 'r') as f:
+            text = f.read()
+        enc = tiktoken.get_encoding("gpt2")
+        self.tokens = torch.tensor(enc.encode(text), dtype=torch.long)
+        print(f"Loaded {len(self.tokens)} tokens from input.txt")
+        print(f"1 epoch is {len(self.tokens) // (B*T)} iterations")
+        
+        #state 
+        self.current_position = 0
+        
+    def next_batch(self):
+        B,T = self.B, self.T
+        buf = self.tokens[self.current_position:self.current_position+B*T+1]
+        x = buf[:-1].view(B,T)
+        y = buf[1:].view(B,T)
+        self.current_position += B*T
+        if self.current_position + B*T + 1 >= len(self.tokens):
+            self.current_position = 0
+        return x, y
+
+
+
 device = "cpu"
 if torch.cuda.is_available():
     device = "cuda"
@@ -176,29 +209,21 @@ elif torch.backends.mps.is_available():
 print(f"Using device: {device}")
 
 
-import tiktoken
-enc = tiktoken.get_encoding("gpt2")
-with open('input.txt', 'r') as f:
-    text = f.read()
-text = text[:1000]
-tokens = enc.encode(text)
-B,T = 4,32
-buf = torch.tensor(tokens[:B*T+1], device=device)
-x = buf[:-1].view(B,T)
-y = buf[1:].view(B,T)
-
+# ------------------------------------------------------------------------------------
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig())
 model.to(device)
 # logits, loss = model(x, targets=y)
 
-#optimizer
+
+# optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for _ in range(50):
     optimizer.zero_grad()
     logits, loss = model(x, targets=y)
     loss.backward()
     optimizer.step()
+    print(f"step {_+1}, loss: {loss.item():.4f}")
 
 
 # print(loss) # (B, T, vocab_size)
