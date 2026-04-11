@@ -92,6 +92,9 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
+        #weight sharing schema
+        self.transformer.wte.weight = self.lm_head.weight
+        
     def forward(self, idx, targets=None):
         #idx is (B, T) tensor of token indices
         B, T = idx.size()
@@ -183,7 +186,7 @@ class DataLoaderLite:
         enc = tiktoken.get_encoding("gpt2")
         self.tokens = torch.tensor(enc.encode(text), dtype=torch.long)
         print(f"Loaded {len(self.tokens)} tokens from input.txt")
-        print(f"1 epoch is {len(self.tokens) // (B*T)} iterations\n")
+        print(f"1 epoch is {len(self.tokens) // (B*T)} iterations")
         
         #state 
         self.current_position = 0
