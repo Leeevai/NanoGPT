@@ -240,7 +240,8 @@ class DataLoaderLite:
             self.current_position = 0
         return x, y
 
-
+# ---------------------------------------------------------------------------------
+# device configuration
 device = "cpu"
 if torch.cuda.is_available():
     device = "cuda"
@@ -249,11 +250,20 @@ elif torch.backends.mps.is_available():
 
 print(f"Using device: {device}")
 
+# -----------------------------------------------------------------------------
+total_batch_size = 524288
+B = 16
+T = 1024
+assert total_batch_size % (B*T) == 0, f"Total batch size {total_batch_size} must be divisible by B*T {B*T}"
+grad_accum_steps = total_batch_size // (B*T)
+print(f'total desired batch size: {total_batch_size}')
+print(f'=> calculated grad accumulation steps: {grad_accum_steps}')
 
-# ------------------------------------------------------------------------------------
-train_loader = DataLoaderLite(B=4, T=1024)
+train_loader = DataLoaderLite(B=B, T=T)
 torch.set_float32_matmul_precision('high')
 
+# ------------------------------------------------------------------------------------
+# get logits and loss
 torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(1337)
@@ -292,18 +302,22 @@ optimizer = model.configure_optimizers(
 
 for step in range(max_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
-    x, y = x.to(device), y.to(device)
+
     optimizer.zero_grad()
-    with torch.amp.autocast(device_type=device,dtype = torch.bfloat16):
-        logits, loss = model(x, targets=y)
-    loss.backward()
+    for micro_step in range(grad_accum_steps):
+        x, y = train_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        with torch.amp.autocast(device_type=device,dtype = torch.bfloat16):
+            logits, loss = model(x, targets=y)
+            loss = loss / grad_accum_steps
+        loss.backward()
+         
     norm  = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    
+
     lr = get_lr(step)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-    
+
     optimizer.step()
     if torch.cuda.is_available():
         torch.cuda.synchronize()
