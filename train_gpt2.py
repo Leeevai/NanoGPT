@@ -10,9 +10,9 @@ class CasualSelfAttention(nn.Module):
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 3*config.n_embd)
-        # output projection
+        # output projection used for the final output of the attention layer after concatenating the heads
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
-        
+        self.c_proj.NANOGPT_SCALE_INIT = 1.0 # scale the initialization of the output projection weights by this factor to improve training stability
         # regularization
         self.n_head = config.n_head
         self.n_embd = config.n_embd
@@ -94,6 +94,20 @@ class GPT(nn.Module):
         
         #weight sharing schema
         self.transformer.wte.weight = self.lm_head.weight
+        
+        # initialize weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        std = 0.02
+        if hasattr(module, 'NANOGPT_SCALE_INIT'):
+            std *= (2 * self.config.n_layer) ** -0.5 # scale the initialization of the output projection weights by the number of layers to improve training stability
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         
     def forward(self, idx, targets=None):
         #idx is (B, T) tensor of token indices
@@ -215,6 +229,13 @@ print(f"Using device: {device}")
 # ------------------------------------------------------------------------------------
 train_loader = DataLoaderLite(B=4, T=32)
 # model = GPT.from_pretrained('gpt2')
+
+torch.manual_seed(1337)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(1337)
+elif torch.backends.mps.is_available():
+    torch.mps.manual_seed(1337)
+    
 model = GPT(GPTConfig())
 model.to(device)
 # logits, loss = model(x, targets=y)
