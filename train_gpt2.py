@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import time
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -244,17 +245,50 @@ model = torch.compile(model)
 # logits, loss = model(x, targets=y)
 
 
+max_lr = 6e-4
+min_lr = max_lr * 0.1
+warmup_steps = 10
+max_steps = 50
+
+def get_lr(it):
+    #1. linear warmup for the first warmup_steps
+    if it < warmup_steps:
+        return max_lr * (it+1) / warmup_steps
+    #2. if it > lr_decay_steps, then return min_lr
+    if it >max_steps:
+        return min_lr
+    #3. in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+    assert 0<=decay_ratio<=1
+    coeff = 0.5 * (1 + torch.cos(torch.tensor(decay_ratio * 3.1415926535)))
+    return min_lr + coeff * (max_lr - min_lr)
+
 # optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for _ in range(50):
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4,betas=(0.9, 0.95),eps =1e-8)
+for step in range(max_steps):
+    t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
     with torch.amp.autocast(device_type=device,dtype = torch.bfloat16):
         logits, loss = model(x, targets=y)
     loss.backward()
+    norm  = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    
+    lr = get_lr(step)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    
     optimizer.step()
-    print(f"step {_+1}, loss: {loss.item():.4f}")
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
+        torch.mps.synchronize()
+    t1 = time.time()
+    dt = t1 - t0
+    tokens_processed = train_loader.B * train_loader.T
+    tps = tokens_processed / dt
+    print(f"step {step+1}, loss: {loss.item():.4f}, time: {dt*1000:.2f}ms, tokens/sec: {tps:.2f}, grad norm: {norm:.4f}")
 
 
 # print(loss) # (B, T, vocab_size)
