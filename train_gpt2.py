@@ -227,8 +227,8 @@ print(f"Using device: {device}")
 
 
 # ------------------------------------------------------------------------------------
-train_loader = DataLoaderLite(B=4, T=32)
-# model = GPT.from_pretrained('gpt2')
+train_loader = DataLoaderLite(B=4, T=1024)
+torch.set_float32_matmul_precision('high')
 
 torch.manual_seed(1337)
 if torch.cuda.is_available():
@@ -247,7 +247,8 @@ for _ in range(50):
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, targets=y)
+    with torch.amp.autocast(device_type=device,dtype = torch.bfloat16):
+        logits, loss = model(x, targets=y)
     loss.backward()
     optimizer.step()
     print(f"step {_+1}, loss: {loss.item():.4f}")
