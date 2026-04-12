@@ -232,11 +232,14 @@ class DataLoaderLite:
         
     def next_batch(self):
         B,T = self.B, self.T
+        # ensure there are enough tokens left for a full batch; if not, wrap to start
+        if self.current_position + B*T + 1 > len(self.tokens):
+            self.current_position = 0
         buf = self.tokens[self.current_position:self.current_position+B*T+1]
         x = buf[:-1].view(B,T)
         y = buf[1:].view(B,T)
         self.current_position += B*T
-        if self.current_position + B*T + 1 >= len(self.tokens):
+        if self.current_position >= len(self.tokens):
             self.current_position = 0
         return x, y
 
@@ -252,7 +255,7 @@ print(f"Using device: {device}")
 
 # -----------------------------------------------------------------------------
 total_batch_size = 524288
-B = 16
+B = 4
 T = 1024
 assert total_batch_size % (B*T) == 0, f"Total batch size {total_batch_size} must be divisible by B*T {B*T}"
 grad_accum_steps = total_batch_size // (B*T)
@@ -304,12 +307,14 @@ for step in range(max_steps):
     t0 = time.time()
 
     optimizer.zero_grad()
+    loss_accum = 0.0
     for micro_step in range(grad_accum_steps):
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
         with torch.amp.autocast(device_type=device,dtype = torch.bfloat16):
             logits, loss = model(x, targets=y)
-            loss = loss / grad_accum_steps
+        loss = loss / grad_accum_steps
+        loss_accum += loss.detach()
         loss.backward()
          
     norm  = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -325,9 +330,9 @@ for step in range(max_steps):
         torch.mps.synchronize()
     t1 = time.time()
     dt = t1 - t0
-    tokens_processed = train_loader.B * train_loader.T
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
     tps = tokens_processed / dt
-    print(f"step {step+1}, loss: {loss.item():.4f}, time: {dt*1000:.2f}ms, tokens/sec: {tps:.2f}, grad norm: {norm:.4f}")
+    print(f"step {step+1}, loss: {loss_accum.item():.4f}, time: {dt*1000:.2f}ms, tokens/sec: {tps:.2f}, grad norm: {norm:.4f}")
 
 
 # print(loss) # (B, T, vocab_size)
