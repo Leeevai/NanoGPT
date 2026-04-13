@@ -219,10 +219,11 @@ max_length = 30
 import tiktoken
 
 class DataLoaderLite:
-    def __init__(self,B,T):
+    def __init__(self,B,T,process_rank=0, num_processes=1):
         self.B = B
         self.T = T
-
+        self.num_processes = num_processes
+        self.process_rank = process_rank
         #at init laod tokens from disk and store them in memory
         with open('input.txt', 'r') as f:
             text = f.read()
@@ -346,8 +347,8 @@ for step in range(max_steps):
         if ddp:
             model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1) # only sync gradients on the last micro step of the gradient accumulation
         loss.backward()
-        if ddp:
-            dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG) 
+    if ddp:
+        dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG) 
          
     norm  = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
