@@ -258,7 +258,7 @@ total_batch_size = 524288
 B = 4
 T = 1024
 assert total_batch_size % (B*T) == 0, f"Total batch size {total_batch_size} must be divisible by B*T {B*T}"
-grad_accum_steps = total_batch_size // (B*T)
+grad_accum_steps = total_batch_size // (B*T) # =524288 // (4*1024) = 128
 print(f'total desired batch size: {total_batch_size}')
 print(f'=> calculated grad accumulation steps: {grad_accum_steps}')
 
@@ -330,7 +330,7 @@ for step in range(max_steps):
         torch.mps.synchronize()
     t1 = time.time()
     dt = t1 - t0
-    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps # = 4 * 1024 * 128 = 524288 = B (total)
     tps = tokens_processed / dt
     print(f"step {step+1}, loss: {loss_accum.item():.4f}, time: {dt*1000:.2f}ms, tokens/sec: {tps:.2f}, grad norm: {norm:.4f}")
 
