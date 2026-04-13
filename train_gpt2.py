@@ -4,6 +4,9 @@ import os
 import tiktoken
 import time
 import torch
+#import ddp for distributed data parallel training across multiple GPUs
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
 
@@ -229,16 +232,16 @@ class DataLoaderLite:
         print(f"1 epoch is {len(self.tokens) // (B*T)} iterations")
         
         #state 
-        self.current_position = 0
+        self.current_position = self.B * self.T * self.process_rank # each process in DDP starts at a different position in the token stream to ensure that they are not all training on the same data at the same time
         
     def next_batch(self):
         B,T = self.B, self.T
         buf = self.tokens[self.current_position:self.current_position+B*T+1]
         x = buf[:-1].view(B,T)
         y = buf[1:].view(B,T)
-        self.current_position += B*T
-        if self.current_position + B*T + 1 >= len(self.tokens):
-            self.current_position = 0
+        self.current_position += B*T*self.num_processes # move the current position forward by B*T tokens for the next batch, and also skip ahead by the number of processes in DDP to ensure that each process is training on a different part of the token stream
+        if self.current_position + B*T*self.num_processes + 1 >= len(self.tokens):
+            self.current_position = self.B * self.T * self.process_rank # if we have reached the end of the token stream, start over from the beginning for this process
         return x, y
 
 # ---------------------------------------------------------------------------------
@@ -278,8 +281,9 @@ B = 16
 T = 1024
 assert total_batch_size % (B*T*ddp_world_size) == 0, f"Total batch size {total_batch_size} must be divisible by B*T {B*T}"
 grad_accum_steps = total_batch_size // (B*T*ddp_world_size) # divide by world size to get the number of gradient accumulation steps per process in DDP
-print(f'total desired batch size: {total_batch_size}')
-print(f'=> calculated grad accumulation steps: {grad_accum_steps}')
+if master_process:
+    print(f'total desired batch size: {total_batch_size}')
+    print(f'=> calculated grad accumulation steps: {grad_accum_steps}')
 
 train_loader = DataLoaderLite(B=B, T=T)
 torch.set_float32_matmul_precision('high')
@@ -295,6 +299,9 @@ elif torch.backends.mps.is_available():
 model = GPT(GPTConfig(vocab_size=50304))
 model.to(device)
 model = torch.compile(model)
+
+if ddp:
+    model = DDP(model, device_ids=[ddp_local_rank])
 # logits, loss = model(x, targets=y)
 
 
@@ -326,13 +333,20 @@ for step in range(max_steps):
     t0 = time.time()
 
     optimizer.zero_grad()
+    loss_accum = 0.0
     for micro_step in range(grad_accum_steps):
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
         with torch.amp.autocast(device_type=device,dtype = torch.bfloat16):
             logits, loss = model(x, targets=y)
-            loss = loss / grad_accum_steps
+
+        loss = loss / grad_accum_steps
+        loss_accum += loss.item()
+        if ddp:
+            model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1) # only sync gradients on the last micro step of the gradient accumulation
         loss.backward()
+        if ddp:
+            dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG) 
          
     norm  = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
@@ -347,10 +361,13 @@ for step in range(max_steps):
         torch.mps.synchronize()
     t1 = time.time()
     dt = t1 - t0
-    tokens_processed = train_loader.B * train_loader.T
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
     tps = tokens_processed / dt
-    print(f"step {step+1}, loss: {loss.item():.4f}, time: {dt*1000:.2f}ms, tokens/sec: {tps:.2f}, grad norm: {norm:.4f}")
+    if master_process:
+        print(f"step {step+1}, loss: {loss.item():.4f}, time: {dt*1000:.2f}ms, tokens/sec: {tps:.2f}, grad norm: {norm:.4f}")
 
+if ddp:
+    destroy_process_group()
 
 # print(loss) # (B, T, vocab_size)
 import sys; sys.exit(0)
