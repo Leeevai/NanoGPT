@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import inspect
+import os
 import tiktoken
 import time
 import torch
@@ -241,21 +242,42 @@ class DataLoaderLite:
         return x, y
 
 # ---------------------------------------------------------------------------------
-# device configuration
-device = "cpu"
-if torch.cuda.is_available():
-    device = "cuda"
-elif torch.backends.mps.is_available():
-    device = "mps"
+from torch.distributed import init_process_group, destroy_process_group
 
-print(f"Using device: {device}")
+#set up DDP (distributed data parallel) if we have multiple GPUs available
+ddp = int(os.environ.get('RANK', -1)) != -1
+if ddp:
+    assert torch.cuda.is_available(), "DDP requires CUDA"
+    init_process_group(backend='nccl')
+    ddp_rank = int(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    device = f'cuda:{ddp_local_rank}'
+    torch.cuda.set_device(device)
+    master_process = ddp_rank == 0
+    print(f"DDP initialized: rank {ddp_rank}/{ddp_world_size}, local rank {ddp_local_rank}, device {device}")
+
+else:
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+    
+    # device configuration
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+
+    print(f"Using device: {device}")
 
 # -----------------------------------------------------------------------------
 total_batch_size = 524288
 B = 16
 T = 1024
-assert total_batch_size % (B*T) == 0, f"Total batch size {total_batch_size} must be divisible by B*T {B*T}"
-grad_accum_steps = total_batch_size // (B*T)
+assert total_batch_size % (B*T*ddp_world_size) == 0, f"Total batch size {total_batch_size} must be divisible by B*T {B*T}"
+grad_accum_steps = total_batch_size // (B*T*ddp_world_size) # divide by world size to get the number of gradient accumulation steps per process in DDP
 print(f'total desired batch size: {total_batch_size}')
 print(f'=> calculated grad accumulation steps: {grad_accum_steps}')
 
